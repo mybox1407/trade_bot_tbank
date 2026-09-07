@@ -935,11 +935,7 @@ async function processSymbol(symbol: Symbol, availableBalance: number): Promise<
       enabled: AUTO_BOT_CONFIG.htfFilterEnabled,
       minAdx1h: AUTO_BOT_CONFIG.htfMinAdx1h,
       precomputedHtf: htfSeries
-    },
-    allowedMarketStates: AUTO_BOT_CONFIG.allowedMarketStates,
-    tradingHoursEnabled: AUTO_BOT_CONFIG.tradingHoursEnabled,
-    tradingWindows: AUTO_BOT_CONFIG.tradingWindows,
-    dropFormingCandle: AUTO_BOT_CONFIG.dropFormingCandle
+    }
   });
   if (!signal.buy && !signal.sell) {
     const indicators = signal.indicators ?? {};
