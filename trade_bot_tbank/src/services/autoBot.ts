@@ -28,7 +28,7 @@ export const AUTO_BOT_CONFIG = {
   contextTimeframe: '15m' as const,
   entryTriggerTimeframe: '1m' as const,
   oneMinuteTriggerIntervalMs: 15 * 1000,
-  
+
   candlesLimit: 300,
   contextCandlesLimit: 250,
   htfCandlesLimit: 300,
@@ -129,14 +129,19 @@ interface BreakoutRuntimeState {
 }
 
 interface SignalResult {
-  symbol: string;
+  symbol: Symbol;
   regime: MarketRegime;
   hasSignal: boolean;
+
   side?: 'long' | 'short';
   entryMode?: EntryMode;
+
   rejectReason?: string;
+  rejectReasons?: string[];
+
   adx?: number;
   atrPct?: number;
+
   error?: string;
 }
 
@@ -238,6 +243,7 @@ function isWithinTradingWindows(now: number, windows: TradingWindows): boolean {
   if ((weekday === 0 || weekday === 6) && isWeekendHoliday(currentDate)) {
     return false;
   }
+
   return windows.some(([start, end]) => minutes >= start && minutes <= end);
 }
 
@@ -265,6 +271,7 @@ function nextTradingWindowOpenMs(now: number): number | null {
       return openTimestamp;
     }
   }
+
   return null;
 }
 
@@ -299,6 +306,7 @@ function trimCandles(candles: Candle[], limit: number, intervalMs: number): Cand
       output = output.slice(0, -1);
     }
   }
+
   if (output.length > limit) output = output.slice(-limit);
   return output;
 }
@@ -309,6 +317,7 @@ function getSignalCandleTime(indicators: Record<string, unknown> | undefined): n
     const parsed = Date.parse(signalTimeUtc);
     if (Number.isFinite(parsed)) return parsed;
   }
+
   return nowMs();
 }
 
@@ -325,6 +334,7 @@ function getExitReasonFromCandle(
     if (candle.high >= position.takeProfitPrice) return 'take_profit';
     return null;
   }
+
   if (candle.high >= position.stopLossPrice) return 'stop_loss';
   if (candle.low <= position.takeProfitPrice) return 'take_profit';
   return null;
@@ -335,6 +345,7 @@ function getCurrentFavorableExcursionR(state: BreakoutRuntimeState, candle: Cand
   if (state.side === 'long') {
     return Math.max(0, (candle.high - state.entryPrice) / state.initialR);
   }
+
   return Math.max(0, (state.entryPrice - candle.low) / state.initialR);
 }
 
@@ -369,6 +380,7 @@ function getTimeFailState(
     const candleMfeR = getCurrentFavorableExcursionR(state, candle);
     state.maxFavorableExcursionR = Math.max(state.maxFavorableExcursionR, candleMfeR);
   }
+
   const barsElapsed = state.processedCandleTimes.size;
   return {
     barsElapsed,
@@ -389,6 +401,7 @@ async function sendTelegramMessage(message: string) {
     log('warn', 'Telegram not configured: missing token or chatId');
     return;
   }
+
   try {
     const url = `https://api.telegram.org/bot${AUTO_BOT_CONFIG.telegramBotToken}/sendMessage`;
     await axios.post(url, { chat_id: AUTO_BOT_CONFIG.telegramChatId, text: message });
@@ -446,76 +459,167 @@ function formatRejectReason(code: string): string {
   return map[code] ?? code;
 }
 
-function formatShortRejectReason(reason: string): string {
-  const shortMap: Record<string, string> = {
+function formatShortRejectReason(
+  reason?: string,
+  rejectReasons?: string[]
+): string {
+  const codes = rejectReasons?.length
+    ? rejectReasons
+    : reason
+      ? [reason]
+      : [];
+
+  if (!codes.length) {
+    return 'Conditions not met';
+  }
+
+  const map: Record<string, string> = {
+    '15m_breakout_context_not_tradeable': 'Context not tradeable',
     '5m_body_too_small': 'Body too small',
+    '5m_body_too_large': 'Body too large',
     '5m_volume_below_threshold': 'Low volume',
     '5m_breakout_not_confirmed_or_too_late': 'No breakout confirmation',
-    '15m_breakout_context_not_tradeable': 'Context not tradeable',
-    'htf_gate': 'Against 1h trend',
+    'breakout_tp1_r_too_low': 'TP1/R too low',
     'stop_distance': 'Stop distance invalid',
     'size_calculation': 'Size calculation failed',
-    'breakout_tp1_r_too_low': 'TP1/R too low',
+    'htf_gate': 'Against 1h trend',
+    'htf_warmup': '1h warm-up',
     'not_trading_hour': 'Outside trading hours',
-    'range': 'Range market',
-    'high_volatility': 'High volatility'
+    'signal_expired': 'Signal expired',
+    'counter_trend_blocked': 'Counter-trend blocked',
+    'incomplete_signal_data': 'Incomplete signal data',
+    'market_state_not_ready': 'Market state not ready',
+    'not_enough_1m_data': 'Not enough 1m data',
+    'not_enough_5m_data': 'Not enough 5m data',
+    'not_enough_15m_data': 'Not enough 15m data',
+    'position_already_open': 'Position already open'
   };
-  return shortMap[reason] ?? reason;
+
+  return codes
+    .slice(0, 2)
+    .map(code => map[code] ?? code)
+    .join(', ');
+}
+
+function getReservedNotionalSafe(): number {
+  return getAllPositions().reduce(
+    (sum, position) => sum + position.notional,
+    0
+  );
 }
 
 function formatSignalSummary(
-  signalResults: SignalResult[],
-  openPositionsCount: number,
-  balance: number
+  signalResults: SignalResult[]
 ): string {
-  const lines: string[] = [];
-  lines.push('📊 Signal Check Summary');
-  lines.push('');
-  lines.push(`📌 Open positions: ${openPositionsCount}/${AUTO_BOT_CONFIG.maxPositions}`);
-  if (openPositionsCount === 0) {
+  const positions = getAllPositions();
+  const equity = getBalance();
+  const reserved = getReservedNotionalSafe();
+  const available = getAvailableBalance();
+
+  const signals = signalResults.filter(
+    result => result.hasSignal
+  ).length;
+
+  const errors = signalResults.filter(
+    result => Boolean(result.error)
+  ).length;
+
+  const noSignals = signalResults.filter(
+    result => !result.hasSignal && !result.error
+  ).length;
+
+  const lines: string[] = [
+    '📊 Signal Check Summary',
+    '',
+    `📌 Open positions: ${positions.length}/${AUTO_BOT_CONFIG.maxPositions}`
+  ];
+
+  if (positions.length === 0) {
     lines.push('No open positions');
   } else {
-    const positionsList = getAllPositions()
-      .map(p => `  • ${p.symbol} ${p.side.toUpperCase()} @ ${formatMoney(p.entryPrice)}`)
-      .join('\n');
-    lines.push(positionsList);
-  }
-  lines.push('');
-  lines.push(`💼 Equity: ${formatMoney(balance)} руб`);
-  lines.push(`🔒 Reserved: ${formatMoney(balance - getAvailableBalance())} руб`);
-  lines.push(`💵 Available: ${formatMoney(getAvailableBalance())} руб`);
-  lines.push('');
-  lines.push('🔎 Signal scan');
-  for (const signal of signalResults) {
-    const icon = signal.hasSignal ? '🎯' : '⏳';
-    const status = signal.hasSignal
-      ? `${signal.side?.toUpperCase()} | ${signal.entryMode}`
-      : 'No signal';
-    let reason = '';
-    if (signal.rejectReason) {
-      reason = formatShortRejectReason(signal.rejectReason);
-    } else if (signal.adx !== undefined) {
-      reason = `Range (ADX: ${signal.adx.toFixed(2)})`;
+    for (const position of positions) {
+      lines.push(
+        `• ${position.symbol} ` +
+        `${position.side.toUpperCase()} @ ` +
+        `${formatMoney(position.entryPrice)}`
+      );
     }
-    lines.push(`${icon} ${signal.symbol}: ${signal.regime} | ${status} | ${reason}`);
   }
-  lines.push('');
-  const totalSignals = signalResults.filter(s => s.hasSignal).length;
-  const noSignals = signalResults.filter(s => !s.hasSignal && !s.error).length;
-  const errors = signalResults.filter(s => s.error).length;
-  lines.push(`Signals: ${totalSignals} | No signals: ${noSignals} | Open: ${openPositionsCount}/${AUTO_BOT_CONFIG.maxPositions} | Errors: ${errors}`);
-  lines.push(formatTime(nowMs()));
+
+  lines.push(
+    '',
+    `💼 Equity: ${formatMoney(equity)} руб`,
+    `🔒 Reserved: ${formatMoney(reserved)} руб`,
+    `💵 Available: ${formatMoney(available)} руб`,
+    '',
+    '🔎 Signal scan'
+  );
+
+  for (const result of signalResults) {
+    const icon = result.hasSignal ? '🎯' : '⏳';
+
+    if (result.hasSignal) {
+      lines.push(
+        `${icon} ${result.symbol}: ${result.regime} | ` +
+        `${result.side?.toUpperCase() ?? 'SIGNAL'} | ` +
+        `${result.entryMode ?? 'breakout_entry'}`
+      );
+
+      continue;
+    }
+
+    let explanation: string;
+
+    if (result.regime === 'unknown') {
+      explanation = 'Unknown regime';
+    } else if (
+      result.regime === 'high_volatility' &&
+      result.atrPct !== undefined
+    ) {
+      explanation =
+        `High volatility (ATR%: ` +
+        `${result.atrPct.toFixed(4)})`;
+    } else if (
+      result.regime === 'range' &&
+      result.adx !== undefined
+    ) {
+      explanation =
+        `Range (ADX: ${result.adx.toFixed(2)})`;
+    } else {
+      explanation = formatShortRejectReason(
+        result.rejectReason,
+        result.rejectReasons
+      );
+    }
+
+    lines.push(
+      `${icon} ${result.symbol}: ${result.regime} | ` +
+      `No signal | ${explanation}`
+    );
+  }
+
+  lines.push(
+    '',
+    `Signals: ${signals} | ` +
+    `No signals: ${noSignals} | ` +
+    `Open: ${positions.length}/${AUTO_BOT_CONFIG.maxPositions} | ` +
+    `Errors: ${errors}`,
+    formatTime(nowMs())
+  );
+
   return lines.join('\n');
 }
 
 async function sendTelegramSignalSummary(
-  signalResults: SignalResult[],
-  openPositionsCount: number,
-  balance: number
+  signalResults: SignalResult[]
 ) {
-  if (!AUTO_BOT_CONFIG.telegramEnabled) return;
-  const message = formatSignalSummary(signalResults, openPositionsCount, balance);
-  await sendTelegramMessage(message);
+  if (!AUTO_BOT_CONFIG.telegramEnabled) {
+    return;
+  }
+
+  await sendTelegramMessage(
+    formatSignalSummary(signalResults)
+  );
 }
 
 export async function sendTelegramTestMessage() {
@@ -533,7 +637,6 @@ export async function sendTelegramTestMessage() {
     'Вход: 5m после закрытия бара',
     'HTF: 1h',
     `Мониторинг позиции: ${AUTO_BOT_CONFIG.positionMonitorIntervalMs / 1000} сек`,
-    `Проверки сигналов: ${AUTO_BOT_CONFIG.telegramSignalChecksEnabled ? 'включены' : 'выключены'}`,
     `Уведомления о сессии: ${AUTO_BOT_CONFIG.telegramSessionNotificationsEnabled ? 'включены' : 'выключены'}`,
     'Telegram подключён и работает.'
   ].join('\n');
@@ -690,6 +793,7 @@ export async function runRegimeCheckCycle() {
     log('warn', 'Regime check already running, skipping');
     return;
   }
+
   isRegimeCheckRunning = true;
   try {
     await notifySessionStateIfChanged(nowMs());
@@ -697,8 +801,10 @@ export async function runRegimeCheckCycle() {
       if (AUTO_BOT_CONFIG.logWhenMarketClosed) {
         log('info', 'Outside trading window, cycle skipped (no API calls)');
       }
+
       return;
     }
+
     log('info', '=== 5M ENTRY / 15M CONTEXT CYCLE START ===');
     const openPositions = getAllPositions();
     const openSymbols = new Set(openPositions.map(position => position.symbol));
@@ -706,8 +812,15 @@ export async function runRegimeCheckCycle() {
     for (const symbol of AUTO_BOT_CONFIG.symbols) {
       if (openSymbols.has(symbol)) {
         log('info', `Skipping ${symbol}: position already open`);
+        signalResults.push({
+          symbol,
+          regime: 'unknown',
+          hasSignal: false,
+          rejectReason: 'position_already_open'
+        });
         continue;
       }
+
       if (pendingSignals.has(symbol)) {
         const pending = pendingSignals.get(symbol)!;
         if (pending.entryMode === 'breakout_entry') {
@@ -727,6 +840,7 @@ export async function runRegimeCheckCycle() {
           pendingSignals.delete(symbol);
           continue;
         }
+
         log('warn', `Unsupported pending signal removed for ${symbol}`, {
           entryMode: pending.entryMode,
           side: pending.side
@@ -734,6 +848,7 @@ export async function runRegimeCheckCycle() {
         pendingSignals.delete(symbol);
         continue;
       }
+
       try {
         const availableBalanceNow = getAvailableBalance();
         const result = await processSymbol(symbol, availableBalanceNow);
@@ -751,13 +866,19 @@ export async function runRegimeCheckCycle() {
         await sleep(500);
       }
     }
+
     if (AUTO_BOT_CONFIG.telegramSummaryMode) {
-      await sendTelegramSignalSummary(signalResults, openPositions.length, getBalance());
+      await sendTelegramSignalSummary(signalResults);
     }
+
     log('info', '=== 5M ENTRY / 15M CONTEXT CYCLE END ===');
   } finally {
     isRegimeCheckRunning = false;
   }
+}
+
+function floorToBar(timestamp: number, barMs: number): number {
+  return Math.floor(timestamp / barMs) * barMs;
 }
 
 async function processSymbol(symbol: Symbol, availableBalance: number): Promise<SignalResult> {
@@ -768,29 +889,34 @@ async function processSymbol(symbol: Symbol, availableBalance: number): Promise<
     log('warn', `${symbol}: not enough 1m entry-trigger candles`, { received: candles1m.length, required: 100 });
     return { symbol, regime: 'unknown', hasSignal: false, rejectReason: 'not_enough_1m_data' };
   }
+
   const candles15mRaw = await getCandles(symbol, AUTO_BOT_CONFIG.contextTimeframe, AUTO_BOT_CONFIG.contextCandlesLimit);
   const candles15m = trimCandles(candles15mRaw, AUTO_BOT_CONFIG.contextCandlesLimit, timeframeToMs(AUTO_BOT_CONFIG.contextTimeframe));
   if (candles15m.length < 220) {
     log('warn', `${symbol}: not enough 15m context candles`, { received: candles15m.length, required: 220 });
     return { symbol, regime: 'unknown', hasSignal: false, rejectReason: 'not_enough_15m_data' };
   }
+
   const candles5mRaw = await getCandles(symbol, AUTO_BOT_CONFIG.timeframe, AUTO_BOT_CONFIG.candlesLimit);
   const candles5m = trimCandles(candles5mRaw, AUTO_BOT_CONFIG.candlesLimit, timeframeToMs(AUTO_BOT_CONFIG.timeframe));
   if (candles5m.length < 60) {
     log('warn', `${symbol}: not enough 5m entry candles`, { received: candles5m.length, required: 60 });
     return { symbol, regime: 'unknown', hasSignal: false, rejectReason: 'not_enough_5m_data' };
   }
+
   const candles1hRaw = await getCandles(symbol, '1h', AUTO_BOT_CONFIG.htfCandlesLimit);
   const candles1h = trimCandles(candles1hRaw, AUTO_BOT_CONFIG.htfCandlesLimit, timeframeToMs('1h'));
   if (candles1h.length < 100) {
     log('warn', `${symbol}: not enough 1h candles for HTF`, { received: candles1h.length, required: 100 });
   }
+
   const htfSeries = buildHtfBiasSeries(candles1h, AUTO_BOT_CONFIG.htfMinAdx1h);
   const marketState = detectMarketState(candles15m);
   if (!marketState.ready) {
     log('warn', `${symbol}: 15m market state not ready`);
     return { symbol, regime: 'unknown', hasSignal: false, rejectReason: 'market_state_not_ready' };
   }
+
   log('info', `${symbol} market state`, {
     state: marketState.state,
     sideBias: marketState.sideBias,
@@ -809,7 +935,11 @@ async function processSymbol(symbol: Symbol, availableBalance: number): Promise<
       enabled: AUTO_BOT_CONFIG.htfFilterEnabled,
       minAdx1h: AUTO_BOT_CONFIG.htfMinAdx1h,
       precomputedHtf: htfSeries
-    }
+    },
+    allowedMarketStates: AUTO_BOT_CONFIG.allowedMarketStates,
+    tradingHoursEnabled: AUTO_BOT_CONFIG.tradingHoursEnabled,
+    tradingWindows: AUTO_BOT_CONFIG.tradingWindows,
+    dropFormingCandle: AUTO_BOT_CONFIG.dropFormingCandle
   });
   if (!signal.buy && !signal.sell) {
     const indicators = signal.indicators ?? {};
@@ -843,20 +973,44 @@ async function processSymbol(symbol: Symbol, availableBalance: number): Promise<
       symbol,
       regime: signal.regime,
       hasSignal: false,
-      rejectReason: indicators.reject as string || 'conditions_not_met',
-      adx: indicators.context15mAdx as number | undefined
+
+      rejectReason:
+        typeof indicators.reject === 'string'
+          ? indicators.reject
+          : 'conditions_not_met',
+
+      rejectReasons:
+        Array.isArray(indicators.rejectReasons)
+          ? indicators.rejectReasons.filter(
+              (value): value is string =>
+                typeof value === 'string'
+            )
+          : undefined,
+
+      adx:
+        typeof indicators.context15mAdx === 'number'
+          ? indicators.context15mAdx
+          : undefined,
+
+      atrPct:
+        typeof indicators.atrPct === 'number'
+          ? indicators.atrPct
+          : undefined
     };
   }
+
   const side = signal.side;
   if (side === 'none') {
     log('warn', `${symbol}: signal side=none but buy/sell set?`);
     return { symbol, regime: signal.regime, hasSignal: false, rejectReason: 'side_none' };
   }
+
   const signalEntryMode: EntryMode = signal.entryMode ?? (signal.indicators?.entryMode as EntryMode | undefined) ?? 'none';
   if (signalEntryMode !== 'breakout_entry') {
     log('warn', `${symbol}: non-breakout signal rejected`, { entryMode: signalEntryMode, side, regime: signal.regime });
     return { symbol, regime: signal.regime, hasSignal: false, rejectReason: 'not_breakout_entry' };
   }
+
   const bias = marketState.sideBias;
   const isCounterTrend = (bias === 'long' && side === 'short') || (bias === 'short' && side === 'long');
   if (isCounterTrend) {
@@ -869,12 +1023,14 @@ async function processSymbol(symbol: Symbol, availableBalance: number): Promise<
     });
     return { symbol, regime: signal.regime, hasSignal: false, rejectReason: 'counter_trend_blocked' };
   }
+
   const coherence = computeCoherenceScore(candles15m, side);
   log('info', `${symbol}: breakout coherence diagnostic`, { entryMode: signalEntryMode, regime: signal.regime, side, coherence });
   if (!signal.stopLossPrice || !signal.takeProfit1Price || !signal.takeProfit2Price || !signal.quantity) {
     log('warn', `${symbol}: incomplete 5m signal data`, { ...signal, entryMode: signalEntryMode });
     return { symbol, regime: signal.regime, hasSignal: false, rejectReason: 'incomplete_signal_data' };
   }
+
   const rawSignalTimeUtc = signal.indicators?.signalTimeUtc;
   const signalCandleTime = floorToBar(getSignalCandleTime(signal.indicators), timeframeToMs(AUTO_BOT_CONFIG.timeframe));
   log('info', `BREAKOUT SIGNAL TIME: ${symbol}`, {
@@ -936,6 +1092,7 @@ async function processSymbol(symbol: Symbol, availableBalance: number): Promise<
       action: 'signal_generated'
     });
   }
+
   log('info', `SIGNAL GENERATED: ${symbol} ${side.toUpperCase()} (5m entry / 15m context)`, {
     entryMode: signalEntryMode,
     entry: signal.price,
@@ -967,10 +1124,6 @@ async function processSymbol(symbol: Symbol, availableBalance: number): Promise<
     entryMode: signalEntryMode,
     adx: signal.indicators?.context15mAdx as number | undefined
   };
-}
-
-function floorToBar(timestamp: number, barMs: number): number {
-  return Math.floor(timestamp / barMs) * barMs;
 }
 
 async function tryExecutePendingSignal(symbol: Symbol) {
@@ -1034,6 +1187,22 @@ async function tryExecutePendingSignal(symbol: Symbol) {
       if (isBreakout) pendingSignals.delete(symbol);
       return;
     }
+
+    const stillBeyondBreakout =
+      pending.side === 'long'
+        ? currentPrice > pending.breakoutLevel
+        : currentPrice < pending.breakoutLevel;
+
+    if (!stillBeyondBreakout) {
+      log('info', `${symbol}: breakout invalidated before execution`, {
+        side: pending.side,
+        currentPrice,
+        breakoutLevel: pending.breakoutLevel
+      });
+      pendingSignals.delete(symbol);
+      return;
+    }
+
     const actualInitialR = Math.abs(currentPrice - pending.stopLossPrice);
     const actualTp1Distance = pending.side === 'long'
       ? pending.takeProfit1Price - currentPrice
@@ -1072,6 +1241,7 @@ async function tryExecutePendingSignal(symbol: Symbol) {
       pendingSignals.delete(symbol);
       return;
     }
+
     const result = openPosition({
       symbol: pending.symbol,
       side: pending.side,
@@ -1091,6 +1261,7 @@ async function tryExecutePendingSignal(symbol: Symbol) {
       log('warn', `Failed to open position for ${symbol}`, { entryMode: pending.entryMode, message: result.message });
       return;
     }
+
     pendingSignals.delete(symbol);
     const openedAt = nowMs();
     const signalCandleTime = floorToBar(pending.signalCandleTime, timeframeToMs(AUTO_BOT_CONFIG.timeframe));
@@ -1106,7 +1277,7 @@ async function tryExecutePendingSignal(symbol: Symbol) {
       signalCandleTime,
       timeFailBars: pending.timeFailBars,
       timeFailMinMfeR: pending.timeFailMinMfeR,
-      processedCandleTimes: new Set<number>(),
+      processedCandleTimes: new Set(),
       maxFavorableExcursionR: 0
     });
     const balanceAfter = getBalance();
@@ -1133,6 +1304,7 @@ async function tryExecutePendingSignal(symbol: Symbol) {
         minTp1R: pending.minTp1R
       });
     }
+
     log('info', `POSITION OPENED: ${symbol} ${pending.side.toUpperCase()}`, {
       entryMode: pending.entryMode,
       signalPrice: pending.entryPrice,
@@ -1199,6 +1371,7 @@ export async function runPositionMonitorCycle() {
       });
       return;
     }
+
     for (const position of positions) {
       try {
         const symbol = getPositionKey(position.symbol);
@@ -1206,6 +1379,7 @@ export async function runPositionMonitorCycle() {
           log('warn', `Skipping unsupported position symbol ${position.symbol}`);
           continue;
         }
+
         const currentPrice = await getCurrentPrice(symbol);
         const runtime = breakoutRuntimeState.get(symbol);
         if (shouldForceCloseSession) {
@@ -1215,6 +1389,7 @@ export async function runPositionMonitorCycle() {
             log('error', `Failed to close ${position.symbol} at session end`, { reason: 'session_close', message: result.message });
             continue;
           }
+
           breakoutRuntimeState.delete(symbol);
           const balanceAfter = getBalance();
           const closedTrade = result.lastClosedTrade;
@@ -1239,6 +1414,7 @@ export async function runPositionMonitorCycle() {
               totalCommission: closedTrade.totalCommission
             });
           }
+
           log('warn', `SESSION CLOSE: ${position.symbol} ${position.side.toUpperCase()}`, { exitPrice: currentPrice, reason: 'session_close', balanceAfter });
           if (closedTrade) {
             await sendTelegramMessage(formatClosePositionMessage(
@@ -1254,14 +1430,17 @@ export async function runPositionMonitorCycle() {
               closedTrade.totalCommission
             ));
           }
+
           continue;
         }
+
         const candles5m = await loadClosed5mCandles(symbol);
         const lastClosedCandle = candles5m.at(-1);
         if (!lastClosedCandle) {
           log('warn', `${position.symbol}: no closed 5m candle available for exit monitoring`);
           continue;
         }
+
         const candleExitReason = getExitReasonFromCandle(position, lastClosedCandle);
         const quoteExitReason: 'take_profit' | 'stop_loss' | null =
           position.side === 'long'
@@ -1297,6 +1476,7 @@ export async function runPositionMonitorCycle() {
             log('warn', `Failed to close ${position.symbol}`, { reason: exitReason, message: result.message });
             continue;
           }
+
           breakoutRuntimeState.delete(symbol);
           const balanceAfter = getBalance();
           const closedTrade = result.lastClosedTrade;
@@ -1324,6 +1504,7 @@ export async function runPositionMonitorCycle() {
               totalCommission: closedTrade.totalCommission
             });
           }
+
           log('info', `POSITION CLOSED: ${position.symbol} ${position.side.toUpperCase()} @ ${currentPrice} (${exitReason.toUpperCase()})`, {
             pnl: closedTrade?.realizedPnL?.toFixed(2),
             triggerOvershoot: exitReason === 'stop_loss' ? triggerOvershoot.toFixed(6) : '0',
@@ -1344,8 +1525,10 @@ export async function runPositionMonitorCycle() {
               closedTrade.totalCommission
             ));
           }
+
           continue;
         }
+
         if (runtime) {
           const timeFail = getTimeFailState(runtime, candles5m, nowMs());
           log('info', `BREAKOUT TIME-FAIL CHECK: ${position.symbol}`, {
@@ -1374,6 +1557,7 @@ export async function runPositionMonitorCycle() {
               });
               continue;
             }
+
             breakoutRuntimeState.delete(symbol);
             const balanceAfter = getBalance();
             const closedTrade = result.lastClosedTrade;
@@ -1403,6 +1587,7 @@ export async function runPositionMonitorCycle() {
                 totalCommission: closedTrade.totalCommission
               });
             }
+
             log('warn', `BREAKOUT TIME FAIL: ${position.symbol} ${position.side.toUpperCase()}`, {
               reason: 'breakout_time_fail',
               currentPrice,
@@ -1459,6 +1644,22 @@ async function runOneMinuteTriggerCycle() {
         log('info', `${symbol}: 1m trigger skipped, price moved too far`, { side: pending.side, signalPrice: pending.entryPrice, currentPrice, priceDiff });
         continue;
       }
+
+      const stillBeyondBreakout =
+        pending.side === 'long'
+          ? currentPrice > pending.breakoutLevel
+          : currentPrice < pending.breakoutLevel;
+
+      if (!stillBeyondBreakout) {
+        log('info', `${symbol}: 1m trigger breakout invalidated`, {
+          side: pending.side,
+          currentPrice,
+          breakoutLevel: pending.breakoutLevel
+        });
+        pendingSignals.delete(symbol);
+        continue;
+      }
+
       const actualInitialR = Math.abs(currentPrice - pending.stopLossPrice);
       const actualTp1Distance = pending.side === 'long' ? pending.takeProfit1Price - currentPrice : currentPrice - pending.takeProfit1Price;
       const actualTp1R = actualInitialR > 0 ? actualTp1Distance / actualInitialR : 0;
@@ -1468,6 +1669,7 @@ async function runOneMinuteTriggerCycle() {
         pendingSignals.delete(symbol);
         continue;
       }
+
       const result = openPosition({
         symbol: pending.symbol,
         side: pending.side,
@@ -1487,6 +1689,7 @@ async function runOneMinuteTriggerCycle() {
         log('warn', `Failed to open position for ${symbol} via 1m trigger`, { entryMode: pending.entryMode, message: result.message });
         continue;
       }
+
       pendingSignals.delete(symbol);
       const openedAt = nowMs();
       const signalCandleTime = floorToBar(pending.signalCandleTime, timeframeToMs(AUTO_BOT_CONFIG.timeframe));
@@ -1502,7 +1705,7 @@ async function runOneMinuteTriggerCycle() {
         signalCandleTime,
         timeFailBars: pending.timeFailBars,
         timeFailMinMfeR: pending.timeFailMinMfeR,
-        processedCandleTimes: new Set<number>(),
+        processedCandleTimes: new Set(),
         maxFavorableExcursionR: 0
       });
       const balanceBefore = getBalance();
@@ -1530,6 +1733,7 @@ async function runOneMinuteTriggerCycle() {
           minTp1R: pending.minTp1R
         });
       }
+
       log('info', `POSITION OPENED (1m trigger): ${symbol} ${pending.side.toUpperCase()}`, {
         entryMode: pending.entryMode,
         signalPrice: pending.entryPrice,
