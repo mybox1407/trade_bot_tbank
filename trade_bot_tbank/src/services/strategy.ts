@@ -80,7 +80,7 @@ const ENTRY_5M_MAX_DISTANCE_FROM_LEVEL_ATR = 0.5;
 // ============================================================================
 // FRESH BREAKOUT ENTRY
 // ============================================================================
-const BREAKOUT_ENTRY_MAX_DISTANCE_ATR = 0.5;
+const BREAKOUT_ENTRY_MAX_DISTANCE_ATR = 0.7;
 const BREAKOUT_ENTRY_MIN_DISTANCE_ATR = 0.05;
 
 // Для ранних breakout-entry допускаем нейтральный RSI.
