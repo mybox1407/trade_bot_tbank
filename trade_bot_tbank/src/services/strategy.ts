@@ -19,7 +19,7 @@ export const BREAKOUT_TP2_R = 2.5;
 
 export const PARTIAL_LOCK_R = 0;
 
-const MIN_STOP_DISTANCE_RATE = 0.005; // ← Увеличено с 0.003
+const MIN_STOP_DISTANCE_RATE = 0.005;
 const MAX_STOP_DISTANCE_RATE = 0.012;
 const MAX_POSITION_FRAC = 0.3;
 const MAX_COMMISSION_SHARE_OF_RISK = 0.28;
@@ -170,7 +170,7 @@ export interface StrategySignal {
   timeFailMinMfeR: number | null;
   minTp1R: number | null;
 
-  indicators: Record<string, unknown>;
+  indicators: Record;
 }
 
 export interface MultiTimeframeInput {
@@ -429,7 +429,7 @@ export function hourBucketStart(timestamp: number): number {
 }
 
 export function aggregateTo1h(candles: Candle[]): Candle[] {
-  const map = new Map<number, Candle>();
+  const map = new Map();
 
   for (const candle of candles) {
     const key = hourBucketStart(candle.time);
@@ -726,7 +726,7 @@ export function detectMarketRegime(
 function emptySignal(
   price: number,
   regime: MarketRegime = 'unknown',
-  indicators: Record<string, unknown> = {}
+  indicators: Record = {}
 ): StrategySignal {
   return {
     price,
@@ -972,12 +972,12 @@ export function analyzeMarketMultiTimeframe(
   const closeNearLow =
     signalCandle5m.close <=
     signalCandle5m.low +
-      lastAtr5m * ENTRY_5M_CLOSE_NEAR_EXTREME_ATR;
+    lastAtr5m * ENTRY_5M_CLOSE_NEAR_EXTREME_ATR;
 
   const closeNearHigh =
     signalCandle5m.close >=
     signalCandle5m.high -
-      lastAtr5m * ENTRY_5M_CLOSE_NEAR_EXTREME_ATR;
+    lastAtr5m * ENTRY_5M_CLOSE_NEAR_EXTREME_ATR;
 
   const contextRegime = context15m.regime;
   const breakoutRegimeBucket = toBreakoutRegimeBucket(contextRegime);
@@ -1049,23 +1049,50 @@ export function analyzeMarketMultiTimeframe(
   let breakoutLongTriggered = false;
   let breakoutShortTriggered = false;
 
+  // ============================================================================
+  // ИСПРАВЛЕНИЕ: Искать пробой за последние 10 свечей 1m, а не только 2
+  // ============================================================================
+  function findRecentBreakoutTrigger(
+    candles: Candle[],
+    level: number,
+    side: 'long' | 'short',
+    lookback = 10
+  ): boolean {
+    const start = Math.max(1, candles.length - lookback);
+
+    for (let i = start; i < candles.length; i++) {
+      const previous = candles[i - 1];
+      const current = candles[i];
+
+      if (side === 'long') {
+        if (previous.close <= level && current.close > level) {
+          return true;
+        }
+      } else if (
+        previous.close >= level &&
+        current.close < level
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   if (input.candles1m && input.candles1m.length >= 2) {
-    const last1m = last(input.candles1m);
-    const prev1m = input.candles1m[input.candles1m.length - 2];
+    breakoutLongTriggered = findRecentBreakoutTrigger(
+      input.candles1m,
+      longBreakoutThreshold,
+      'long',
+      10
+    );
 
-    if (
-      prev1m.close <= longBreakoutThreshold &&
-      last1m.close > longBreakoutThreshold
-    ) {
-      breakoutLongTriggered = true;
-    }
-
-    if (
-      prev1m.close >= shortBreakdownThreshold &&
-      last1m.close < shortBreakdownThreshold
-    ) {
-      breakoutShortTriggered = true;
-    }
+    breakoutShortTriggered = findRecentBreakoutTrigger(
+      input.candles1m,
+      shortBreakdownThreshold,
+      'short',
+      10
+    );
   }
 
   // ==========================================================================
@@ -1123,7 +1150,7 @@ export function analyzeMarketMultiTimeframe(
       ? 'none'
       : 'breakout_entry';
 
-  const htfMeta: Record<string, unknown> = {};
+  const htfMeta: Record = {};
 
   if (side !== 'none' && htf.enabled) {
     const minAdx = htf.minAdx1h ?? 18;
