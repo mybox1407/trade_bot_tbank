@@ -23,8 +23,8 @@ const MIN_STOP_DISTANCE_RATE = 0.005;
 const MAX_STOP_DISTANCE_RATE = 0.012;
 const MAX_POSITION_FRAC = 0.3;
 const MAX_COMMISSION_SHARE_OF_RISK = 0.28;
-const MIN_ADX_TREND = 20;
-const MIN_ADX_RANGE = 18;
+const MIN_ADX_TREND = 15;
+const MIN_ADX_RANGE = 12;
 const BB_SQUEEZE_THRESHOLD = 0.06;
 const STOP_STRUCTURE_LOOKBACK = 8;
 const STOP_SWING_PAD_ATR = 0.18;
@@ -64,7 +64,7 @@ export const BREAKOUT_TIME_FAIL_MIN_MFE_R = 0.20;
 // VOLUME SETTINGS
 // ============================================================================
 const VOLUME_LOOKBACK = 20;
-const VOLUME_SPIKE_MULTIPLIER = 0.5;
+const VOLUME_SPIKE_MULTIPLIER = 1;
 
 // ============================================================================
 // 5M ENTRY SETTINGS
@@ -72,9 +72,9 @@ const VOLUME_SPIKE_MULTIPLIER = 0.5;
 const ENTRY_5M_DIAGNOSTIC_LOOKBACK = 4;
 const ENTRY_5M_DIAGNOSTIC_ATR_BUFFER = 0.05;
 const ENTRY_5M_MAX_EMA20_EXTENSION_ATR = 0.8;
-const ENTRY_5M_VOLUME_MULTIPLIER = 0.5;
+const ENTRY_5M_VOLUME_MULTIPLIER = 1;
 const ENTRY_5M_ATR_STOP_MULT = 1.1;
-const ENTRY_5M_CLOSE_NEAR_EXTREME_ATR = 0.70;
+const ENTRY_5M_CLOSE_NEAR_EXTREME_ATR = 1;
 const ENTRY_5M_MAX_DISTANCE_FROM_LEVEL_ATR = 0.5;
 
 // ============================================================================
@@ -86,10 +86,10 @@ const BREAKOUT_ENTRY_MIN_DISTANCE_ATR = 0.05;
 // Для ранних breakout-entry допускаем нейтральный RSI.
 // Направление подтверждают: закрытие за уровнем, объём,
 // тело свечи и closeNearHigh/closeNearLow.
-const BREAKOUT_LONG_RSI_MIN = 45;
-const BREAKOUT_LONG_RSI_MAX = 78;
-const BREAKOUT_SHORT_RSI_MIN = 22;
-const BREAKOUT_SHORT_RSI_MAX = 56;
+const BREAKOUT_LONG_RSI_MIN = 40;
+const BREAKOUT_LONG_RSI_MAX = 85;
+const BREAKOUT_SHORT_RSI_MIN = 15;
+const BREAKOUT_SHORT_RSI_MAX = 60;
 
 // ============================================================================
 // ТИПЫ
@@ -643,7 +643,7 @@ export function detectMarketRegime(
 
   const adxOk =
     lastAdx.adx >= MIN_ADX_TREND &&
-    (adxRising || lastAdx.adx >= 26);
+    (adxRising || lastAdx.adx >= 18);
 
   const stackUp =
     lastEma20 > lastEma50 &&
@@ -1102,12 +1102,12 @@ export function analyzeMarketMultiTimeframe(
 
   const longDistanceOk =
     isBreakoutWatch
-      ? (longBreakoutDistanceAtr >= -0.5 && longBreakoutDistanceAtr <= 1.0)
+      ? (longBreakoutDistanceAtr >= -0.5 && longBreakoutDistanceAtr <= 1.5)
       : freshLongBreakout;
 
   const shortDistanceOk =
     isBreakoutWatch
-      ? (shortBreakoutDistanceAtr >= -0.5 && shortBreakoutDistanceAtr <= 1.0)
+      ? (shortBreakoutDistanceAtr >= -0.5 && shortBreakoutDistanceAtr <= 1.5)
       : freshShortBreakdown;
 
   const breakoutLongRaw =
