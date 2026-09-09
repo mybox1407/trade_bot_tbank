@@ -730,7 +730,7 @@ function formatClosePositionMessage(
   ].join('\n');
 }
 
-function getVolumeLogMeta(indicators: Record<string, unknown> | undefined) {
+function getVolumeLogMeta(indicators: Record<string, any> | undefined) {
   if (!indicators) return {};
   return {
     volumeSpike: indicators.volumeSpike,
@@ -742,7 +742,7 @@ function getVolumeLogMeta(indicators: Record<string, unknown> | undefined) {
   };
 }
 
-function get5mEntryLogMeta(indicators: Record<string, unknown> | undefined) {
+function get5mEntryLogMeta(indicators: Record<string, any> | undefined) {
   if (!indicators) return {};
   return {
     entryMode: indicators.entryMode,
