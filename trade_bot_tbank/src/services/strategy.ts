@@ -170,7 +170,7 @@ export interface StrategySignal {
   timeFailMinMfeR: number | null;
   minTp1R: number | null;
 
-  indicators: Record;
+   indicators: Record<string, any>;
 }
 
 export interface MultiTimeframeInput {
@@ -726,7 +726,7 @@ export function detectMarketRegime(
 function emptySignal(
   price: number,
   regime: MarketRegime = 'unknown',
-  indicators: Record = {}
+  indicators: Record<string, any> = {}
 ): StrategySignal {
   return {
     price,
@@ -1150,7 +1150,7 @@ export function analyzeMarketMultiTimeframe(
       ? 'none'
       : 'breakout_entry';
 
-  const htfMeta: Record = {};
+  const htfMeta: Record<string, any> = {};
 
   if (side !== 'none' && htf.enabled) {
     const minAdx = htf.minAdx1h ?? 18;
